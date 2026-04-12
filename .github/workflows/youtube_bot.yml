@@ -1,0 +1,49 @@
+name: YouTube Shorts Bot
+
+on:
+  schedule:
+    - cron: '30 3 * * *'    # 09:00 IST daily
+    - cron: '30 15 * * *'   # 21:00 IST daily
+  workflow_dispatch:         # Manual trigger from GitHub UI
+
+jobs:
+  run-bot:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30      # Auto-cancel if stuck
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install System Dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y ffmpeg fonts-noto fonts-indic
+
+      - name: Install Python Dependencies
+        run: pip install -r requirements.txt
+
+      - name: Create .env file
+        run: |
+          echo "GEMINI_API_KEY=${{ secrets.GEMINI_API_KEY }}" > .env
+          echo "PEXELS_API_KEY=${{ secrets.PEXELS_API_KEY }}" >> .env
+          echo "ELEVENLABS_API_KEY=${{ secrets.ELEVENLABS_API_KEY }}" >> .env
+
+      - name: Deploy YouTube Credentials
+        run: |
+          echo '${{ secrets.YOUTUBE_CLIENT_SECRETS }}' > client_secrets.json
+          for profile_dir in profiles/*/; do
+            if [ -d "$profile_dir" ]; then
+              echo '${{ secrets.YOUTUBE_TOKEN }}' > "${profile_dir}token.json"
+              echo "  Token deployed to $profile_dir"
+            fi
+          done
+
+      - name: Run Bot
+        run: python3 -u main.py --all
