@@ -4,6 +4,7 @@ import random
 import subprocess
 import sys
 import time
+import re
 
 import requests
 
@@ -134,9 +135,8 @@ class Generator:
 
         # Clean text for TTS
         clean = story.replace("[PAUSE]", "...").replace("\n", " ").strip()
-        for label in ["[HOOK - 0 to 3s]", "[SETUP - 3 to 30s]", "[SUSPENSE - 30 to 120s]",
-                      "[CLIMAX - 120 to 160s]", "[TWIST - last 20s]"]:
-            clean = clean.replace(label, "")
+        # Regex to strip ALL bracketed labels from the narration to prevent the TTS from speaking them
+        clean = re.sub(r'\[.*?\]', '', clean)
         clean = " ".join(clean.split())
 
         el_key = self.cfg.api_key("elevenlabs")
