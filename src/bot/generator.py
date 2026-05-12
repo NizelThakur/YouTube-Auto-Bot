@@ -150,14 +150,18 @@ class Generator:
         if el_key:
             try:
                 print("  Generating audio with ElevenLabs...")
-                from elevenlabs import save
                 from elevenlabs.client import ElevenLabs
 
                 client = ElevenLabs(api_key=el_key)
-                audio = client.generate(
-                    text=clean, voice=voice_id, model="eleven_multilingual_v2"
+                audio_gen = client.text_to_speech.convert(
+                    text=clean,
+                    voice_id=voice_id,
+                    model_id="eleven_multilingual_v2",
                 )
-                save(audio, audio_path)
+                # audio_gen is a generator — collect bytes and write to file
+                with open(audio_path, "wb") as af:
+                    for chunk in audio_gen:
+                        af.write(chunk)
                 print("  ElevenLabs audio saved.")
 
                 # Generate VTT subtitle file via edge-tts (for timing reference)
