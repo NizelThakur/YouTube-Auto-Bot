@@ -7,3 +7,4 @@ imageio-ffmpeg>=0.4
 elevenlabs>=1.0
 edge-tts>=6.1
 Pillow>=10.0
+schedule>=1.2

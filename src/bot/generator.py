@@ -18,18 +18,18 @@ class Generator:
     #  STORY GENERATION
     # ------------------------------------------------------------------ #
 
-    def _gemini_url(self) -> str:
-        key = self.cfg.api_key("gemini")
-        model = self.cfg.get("channel", "model", default="gemini-2.0-flash")
-        return (
-            f"https://generativelanguage.googleapis.com/v1beta/models/"
-            f"{model}:generateContent?key={key}"
-        )
-
     def generate_story(self) -> dict:
         niche = self.cfg.get("channel", "niche", default="Mythology Horror")
         lang = self.cfg.get("channel", "language", default="Hindi")
         hashtag_count = self.cfg.get("metadata", "hashtag_count", default=8)
+
+        # Fail fast if no API key
+        key = self.cfg.api_key("gemini")
+        if not key:
+            raise Exception(
+                "GEMINI_API_KEY is not set! "
+                "Add it to your .env file (local) or GitHub Secrets (CI)."
+            )
 
         print(f"  Generating {lang} story for '{niche}'...")
 
@@ -59,16 +59,15 @@ class Generator:
             f'"description": "<High-retention {lang} hook description + {hashtag_count} CURRENT TRENDING VIRAL hashtags (do NOT just use generic tags, find hyper-relevant viral tags)>"}}'
         )
 
-        # Try primary model, then fallback model on quota issues
-        # gemini-2.5-flash has higher free-tier RPM
+        # Try primary model, then fallback.
+        # gemini-2.0-flash has very high free-tier quota → best fallback.
         models_to_try = [
             self.cfg.get("channel", "model", default="gemini-2.5-flash"),
-            "gemini-2.5-pro",          # try pro as secondary
+            "gemini-2.0-flash",
         ]
 
         last_error = None
         for model_idx, model in enumerate(models_to_try):
-            key = self.cfg.api_key("gemini")
             url = (
                 f"https://generativelanguage.googleapis.com/v1beta/models/"
                 f"{model}:generateContent?key={key}"
@@ -133,11 +132,16 @@ class Generator:
         audio_path = os.path.join(self.build_dir, "audio.mp3")
         vtt_path = os.path.join(self.build_dir, "subtitles.vtt")
 
-        # Clean text for TTS
-        clean = story.replace("[PAUSE]", "...").replace("\n", " ").strip()
-        # Regex to strip ALL bracketed labels from the narration to prevent the TTS from speaking them
+        # Clean text for TTS — order matters:
+        # 1. Replace [PAUSE] with ellipsis (preserves dramatic pacing)
+        # 2. Strip all remaining [BRACKETED] labels (section markers etc.)
+        # 3. Collapse whitespace
+        clean = story.replace("[PAUSE]", "...")
         clean = re.sub(r'\[.*?\]', '', clean)
         clean = " ".join(clean.split())
+
+        if not clean.strip():
+            raise Exception("Story text is empty after cleaning!")
 
         el_key = self.cfg.api_key("elevenlabs")
         voice_id = self.cfg.get("voice", "elevenlabs_voice_id", default="AZnzlk1Xhkbc9v3EByMW")
@@ -196,10 +200,14 @@ class Generator:
         import shutil
 
         # Use pre-existing backgrounds from profile folder if available
-        profile_bgs = sorted([
-            f for f in os.listdir(self.cfg.profile_dir)
-            if f.startswith("bg_") and f.endswith(".mp4")
-        ])
+        try:
+            profile_bgs = sorted([
+                f for f in os.listdir(self.cfg.profile_dir)
+                if f.startswith("bg_") and f.endswith(".mp4")
+            ])
+        except FileNotFoundError:
+            profile_bgs = []
+
         if profile_bgs:
             print(f"  Using {len(profile_bgs)} pre-downloaded background clips...")
             for f in profile_bgs:
@@ -209,7 +217,11 @@ class Generator:
 
         pexels_key = self.cfg.api_key("pexels")
         if not pexels_key:
-            raise Exception("No Pexels API key configured and no pre-existing bg videos!")
+            raise Exception(
+                "No Pexels API key configured and no pre-existing bg videos!\n"
+                "Either add PEXELS_API_KEY to .env / GitHub Secrets,\n"
+                "or place bg_0.mp4, bg_1.mp4, ... in your profile folder."
+            )
 
         print(f"  Downloading background clips from Pexels...")
         headers = {"Authorization": pexels_key}
@@ -224,6 +236,7 @@ class Generator:
                             "size": "medium", "per_page": 3},
                     timeout=20,
                 )
+                resp.raise_for_status()
                 videos = resp.json().get("videos", [])
                 if not videos:
                     continue
@@ -257,6 +270,7 @@ class Generator:
                 params={"query": thumb_q, "orientation": "portrait", "per_page": 3},
                 timeout=20,
             )
+            resp.raise_for_status()
             photos = resp.json().get("photos", [])
             if photos:
                 img = requests.get(random.choice(photos)["src"]["large"], timeout=30).content

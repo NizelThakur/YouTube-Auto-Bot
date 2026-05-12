@@ -2,6 +2,7 @@ import glob
 import os
 import re
 import subprocess
+import sys
 
 from imageio_ffmpeg import get_ffmpeg_exe
 
@@ -121,6 +122,20 @@ class Assembler:
     #  STEP 3 — Merge video + voiceover + subtitles, trim to audio length
     # ------------------------------------------------------------------ #
 
+    @staticmethod
+    def _escape_ffmpeg_path(path: str) -> str:
+        """
+        Escape a file path for use inside ffmpeg filter expressions.
+        ffmpeg's libass subtitle filter needs:
+          - backslashes escaped (Windows paths)
+          - colons escaped       (Windows drive letters like C:)
+          - single-quotes escaped
+        """
+        path = path.replace("\\", "/")       # convert to forward slashes
+        path = path.replace(":", "\\:")       # escape colons for libass
+        path = path.replace("'", "'\\''")     # escape single quotes
+        return path
+
     def assemble_final(self, bg: str, audio_dur: float) -> str:
         audio = os.path.join(self.build_dir, "audio.mp3")
         vtt = os.path.join(self.build_dir, "subtitles.vtt")
@@ -134,26 +149,36 @@ class Assembler:
 
         print(f"  Merging video + audio + subtitles → {audio_dur:.1f}s final video...")
 
+        # Build the subtitle filter.
+        # Use absolute path (escaped for ffmpeg) so it works regardless of cwd.
+        escaped_vtt = self._escape_ffmpeg_path(os.path.abspath(vtt))
+        sub_filter = f"subtitles={escaped_vtt}:force_style='{style}'"
+
         # CRITICAL:
         #   -i bg           = input 0 (video stream)
         #   -i audio        = input 1 (audio stream)
         #   -map 0:v:0      = take video from input 0
         #   -map 1:a:0      = take audio from input 1
-        #   -t audio_dur    = OUTPUT option (comes AFTER inputs) — limits output, not input
+        #   -t audio_dur    = OUTPUT option (comes AFTER inputs) — limits output
         cmd = [
             self.ffmpeg, "-y",
             "-i", bg,
             "-i", audio,
             "-map", "0:v:0",
             "-map", "1:a:0",
-            "-vf", f"subtitles={os.path.basename(vtt)}:force_style='{style}'",
+            "-vf", sub_filter,
             "-c:v", "libx264", "-preset", "fast", "-crf", "23",
             "-c:a", "aac", "-b:a", "128k",
-            "-t", str(audio_dur),   # ← OUTPUT duration limit (correct position)
+            "-t", str(audio_dur),
             "-movflags", "+faststart",
             output,
         ]
-        subprocess.run(cmd, cwd=self.build_dir, check=True)
+
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        if result.returncode != 0:
+            print(f"  ffmpeg stderr:\n{result.stderr[-2000:]}")
+            raise Exception(f"ffmpeg assembly failed (exit code {result.returncode})")
+
         print(f"  ✅ Final video: {os.path.basename(output)} ({audio_dur:.1f}s)")
         return output
 
@@ -180,4 +205,4 @@ class Assembler:
         final = self.assemble_final(bg, audio_dur)
 
         print("[2/3] Assembly complete.\n")
-        import shutil; shutil.copy(final, "finished_video.mp4"); print("Saved copy to final_short.mp4 in main folder!"); return final
+        return final

@@ -1,6 +1,7 @@
 import hashlib
 import json
 import os
+import time
 from datetime import datetime, timezone
 
 import googleapiclient.discovery
@@ -35,8 +36,13 @@ class Uploader:
     def _load_history(self) -> list:
         path = self.cfg.history_path()
         if os.path.exists(path):
-            with open(path, "r", encoding="utf-8") as f:
-                return json.load(f)
+            try:
+                with open(path, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                if isinstance(data, list):
+                    return data
+            except (json.JSONDecodeError, OSError) as e:
+                print(f"  Warning: Could not read upload history: {e}")
         return []
 
     def _save_history(self, video_id: str, title: str, sha: str):
@@ -57,28 +63,47 @@ class Uploader:
 
     def _get_youtube_client(self):
         token_path = self.cfg.token_path()
-        if not os.path.exists(token_path):
-            print("  [Auth] token.json not found! Opening browser for local Google login...")
-            from google_auth_oauthlib.flow import InstalledAppFlow
-            flow = InstalledAppFlow.from_client_secrets_file(self.cfg.client_secrets_path(), SCOPES)
-            creds = flow.run_local_server(port=0)
-            with open(token_path, "w") as f:
-                f.write(creds.to_json())
-        else:
-            creds = Credentials.from_authorized_user_file(token_path, SCOPES)
+        creds = None
 
-        if creds.expired and creds.refresh_token:
-            print("  Refreshing YouTube OAuth token...")
-            creds.refresh(Request())
-            with open(token_path, "w") as f:
-                f.write(creds.to_json())
-            print("  Token refreshed and saved.")
+        if os.path.exists(token_path):
+            try:
+                creds = Credentials.from_authorized_user_file(token_path, SCOPES)
+            except Exception as e:
+                print(f"  Warning: Failed to load token.json: {e}")
+                creds = None
 
-        if not creds.valid:
-            raise Exception(
-                "YouTube credentials are invalid and cannot be refreshed. "
-                "Re-run the OAuth flow locally and update YOUTUBE_TOKEN secret."
-            )
+        # If no valid creds, try interactive OAuth (local only)
+        if not creds or not creds.valid:
+            if creds and creds.expired and creds.refresh_token:
+                print("  Refreshing YouTube OAuth token...")
+                try:
+                    creds.refresh(Request())
+                    with open(token_path, "w") as f:
+                        f.write(creds.to_json())
+                    print("  Token refreshed and saved.")
+                except Exception as e:
+                    print(f"  Token refresh failed: {e}")
+                    creds = None
+
+            if not creds or not creds.valid:
+                if os.getenv("GITHUB_ACTIONS"):
+                    raise Exception(
+                        "YouTube credentials are invalid/expired and cannot be "
+                        "refreshed in CI. Re-run the OAuth flow locally:\n"
+                        "  1. Delete profiles/<name>/token.json\n"
+                        "  2. Run: python main.py --profile <name> --dry-run\n"
+                        "  3. Complete the browser OAuth flow\n"
+                        "  4. Update the YOUTUBE_TOKEN secret in GitHub"
+                    )
+                print("  [Auth] No valid credentials. Opening browser for Google login...")
+                from google_auth_oauthlib.flow import InstalledAppFlow
+                flow = InstalledAppFlow.from_client_secrets_file(
+                    self.cfg.client_secrets_path(), SCOPES
+                )
+                creds = flow.run_local_server(port=0)
+                with open(token_path, "w") as f:
+                    f.write(creds.to_json())
+                print("  New token saved.")
 
         return googleapiclient.discovery.build("youtube", "v3", credentials=creds)
 
@@ -123,38 +148,53 @@ class Uploader:
             print("[3/3] Upload skipped (dry run).\n")
             return
 
-        # Upload
+        # Upload with retry
         youtube = self._get_youtube_client()
 
         print("  Uploading to YouTube...")
-        request = youtube.videos().insert(
-            part="snippet,status",
-            body={
-                "snippet": {
-                    "title": title,
-                    "description": description,
-                    "tags": tags,
-                    "categoryId": "24",  # Entertainment
-                },
-                "status": {
-                    "privacyStatus": privacy,
-                    "selfDeclaredMadeForKids": False,
-                },
+        request_body = {
+            "snippet": {
+                "title": title,
+                "description": description,
+                "tags": tags,
+                "categoryId": "24",  # Entertainment
             },
-            media_body=MediaFileUpload(self.video_file, chunksize=-1, resumable=True),
-        )
+            "status": {
+                "privacyStatus": privacy,
+                "selfDeclaredMadeForKids": False,
+            },
+        }
 
-        response = None
-        while response is None:
-            status, response = request.next_chunk()
-            if status:
-                pct = int(status.progress() * 100)
-                print(f"  Uploading... {pct}%")
+        max_retries = 3
+        for retry in range(max_retries):
+            try:
+                upload_request = youtube.videos().insert(
+                    part="snippet,status",
+                    body=request_body,
+                    media_body=MediaFileUpload(
+                        self.video_file, chunksize=10 * 1024 * 1024, resumable=True
+                    ),
+                )
 
-        video_id = response["id"]
-        url = f"https://youtube.com/shorts/{video_id}"
+                response = None
+                while response is None:
+                    status, response = upload_request.next_chunk()
+                    if status:
+                        pct = int(status.progress() * 100)
+                        print(f"  Uploading... {pct}%")
 
-        print(f"\n  ✅ SUCCESS! Uploaded: {url}\n")
-        self._save_history(video_id, title, sha)
-        print("[3/3] Upload complete.\n")
-        return video_id
+                video_id = response["id"]
+                url = f"https://youtube.com/shorts/{video_id}"
+
+                print(f"\n  ✅ SUCCESS! Uploaded: {url}\n")
+                self._save_history(video_id, title, sha)
+                print("[3/3] Upload complete.\n")
+                return video_id
+
+            except Exception as e:
+                if retry < max_retries - 1:
+                    wait = 10 * (retry + 1)
+                    print(f"  Upload attempt {retry + 1} failed: {e}. Retrying in {wait}s...")
+                    time.sleep(wait)
+                else:
+                    raise Exception(f"Upload failed after {max_retries} attempts: {e}")
