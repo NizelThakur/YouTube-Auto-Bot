@@ -140,7 +140,7 @@ class Uploader:
         # Duplicate check
         for entry in self._load_history():
             if entry.get("sha256") == sha:
-                print(f"  ⚠️  Duplicate! Already uploaded as {entry.get('video_id')}. Skipping.")
+                print(f"  [SKIP] Duplicate! Already uploaded as {entry.get('video_id')}. Skipping.")
                 return
 
         if dry_run:
@@ -186,7 +186,7 @@ class Uploader:
                 video_id = response["id"]
                 url = f"https://youtube.com/shorts/{video_id}"
 
-                print(f"\n  ✅ SUCCESS! Uploaded: {url}\n")
+                print(f"\n  [OK] SUCCESS! Uploaded: {url}\n")
                 self._save_history(video_id, title, sha)
                 print("[3/3] Upload complete.\n")
                 return video_id

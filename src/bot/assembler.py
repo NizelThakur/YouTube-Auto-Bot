@@ -179,7 +179,7 @@ class Assembler:
             print(f"  ffmpeg stderr:\n{result.stderr[-2000:]}")
             raise Exception(f"ffmpeg assembly failed (exit code {result.returncode})")
 
-        print(f"  ✅ Final video: {os.path.basename(output)} ({audio_dur:.1f}s)")
+        print(f"  [OK] Final video: {os.path.basename(output)} ({audio_dur:.1f}s)")
         return output
 
     # ------------------------------------------------------------------ #

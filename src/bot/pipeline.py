@@ -32,12 +32,12 @@ class Pipeline:
                 Uploader(self.cfg, build_dir).run(dry_run=dry_run)
 
                 print(f"{'='*55}")
-                print(f"  ✅ PIPELINE SUCCESS: {self.profile_name.upper()}")
+                print(f"  [OK] PIPELINE SUCCESS: {self.profile_name.upper()}")
                 print(f"{'='*55}\n")
 
             except Exception as e:
                 print(f"\n{'='*55}")
-                print(f"  ❌ PIPELINE FAILED: {self.profile_name.upper()}")
+                print(f"  [FAIL] PIPELINE FAILED: {self.profile_name.upper()}")
                 print(f"  Error: {e}")
                 print(f"--- Traceback ---")
                 traceback.print_exc()
